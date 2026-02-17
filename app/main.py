@@ -9,7 +9,7 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="TM Super Agente", version="0.1.0")
+app = FastAPI(title="TM Super Agente", version="0.2.0")
 
 
 POSITIVE_WORDS = {
@@ -35,6 +35,30 @@ NEGATIVE_WORDS = {
     "odiei",
     "cancelado",
     "crise",
+}
+
+STOPWORDS = {
+    "a",
+    "o",
+    "os",
+    "as",
+    "de",
+    "do",
+    "da",
+    "dos",
+    "das",
+    "e",
+    "em",
+    "no",
+    "na",
+    "nos",
+    "nas",
+    "um",
+    "uma",
+    "que",
+    "com",
+    "para",
+    "por",
 }
 
 
@@ -64,8 +88,16 @@ class SuperAgentStore:
         self._mentions: List[Mention] = []
         self._lock = Lock()
 
+    def reset(self) -> None:
+        with self._lock:
+            self._columns = {}
+            self._mentions = []
+
     def add_column(self, keyword: str) -> str:
         normalized = keyword.strip()
+        if not normalized:
+            raise ValueError("Nome da coluna vazio")
+
         key = normalized.lower()
         with self._lock:
             if key in self._columns:
@@ -75,9 +107,10 @@ class SuperAgentStore:
 
     def remove_column(self, keyword: str) -> None:
         with self._lock:
-            if keyword.lower() not in self._columns:
+            normalized = keyword.strip().lower()
+            if normalized not in self._columns:
                 raise KeyError("Coluna não encontrada")
-            del self._columns[keyword.lower()]
+            del self._columns[normalized]
 
     def list_columns(self) -> List[str]:
         return list(self._columns.values())
@@ -85,19 +118,20 @@ class SuperAgentStore:
     def ingest_mention(self, mention_in: MentionCreate) -> Mention:
         timestamp = mention_in.created_at or datetime.now(timezone.utc)
         text = mention_in.text.strip()
+        source = mention_in.source.strip()
+
         if not text:
             raise ValueError("Texto vazio")
+        if not source:
+            raise ValueError("Fonte vazia")
 
-        matched = [
-            value
-            for key, value in self._columns.items()
-            if key in text.lower()
-        ]
+        normalized_text = text.lower()
+        matched = [value for key, value in self._columns.items() if key in normalized_text]
 
         mention = Mention(
             id=str(uuid4()),
             text=text,
-            source=mention_in.source.strip(),
+            source=source,
             created_at=timestamp,
             matched_columns=matched,
             sentiment=classify_sentiment(text),
@@ -111,29 +145,40 @@ class SuperAgentStore:
         if display_name is None:
             raise KeyError("Coluna não encontrada")
 
-        selected = [
-            m for m in self._mentions if display_name in m.matched_columns
-        ]
+        selected = [m for m in self._mentions if display_name in m.matched_columns]
         selected.sort(key=lambda m: m.created_at, reverse=True)
         selected = selected[:limit]
 
         sentiment_count = {"positivo": 0, "negativo": 0, "neutro": 0}
         source_count: Dict[str, int] = {}
+        token_count: Dict[str, int] = {}
+
         for mention in selected:
             sentiment_count[mention.sentiment] += 1
             source_count[mention.source] = source_count.get(mention.source, 0) + 1
+            for token in tokenize(mention.text):
+                if token not in STOPWORDS:
+                    token_count[token] = token_count.get(token, 0) + 1
+
+        top_terms = sorted(token_count.items(), key=lambda item: item[1], reverse=True)[:10]
 
         return {
             "column": display_name,
             "volume": len(selected),
             "sentiment": sentiment_count,
             "source_breakdown": source_count,
+            "top_terms": [{"term": term, "count": count} for term, count in top_terms],
             "mentions": [asdict(m) for m in selected],
         }
 
 
+def tokenize(text: str) -> List[str]:
+    cleaned = [t.strip(".,!?;:\"'()[]{}") for t in text.split()]
+    return [token.lower() for token in cleaned if token]
+
+
 def classify_sentiment(text: str) -> Literal["positivo", "negativo", "neutro"]:
-    tokens = {t.strip(".,!?;:\"'()[]{}").lower() for t in text.split()}
+    tokens = set(tokenize(text))
     pos = len(tokens & POSITIVE_WORDS)
     neg = len(tokens & NEGATIVE_WORDS)
 
@@ -177,7 +222,10 @@ def delete_column(column_name: str) -> dict:
 
 @app.post("/mentions")
 def create_mention(payload: MentionCreate) -> dict:
-    mention = store.ingest_mention(payload)
+    try:
+        mention = store.ingest_mention(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"mention": asdict(mention)}
 
 

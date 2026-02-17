@@ -1,9 +1,13 @@
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.main import app, store
 
 
 client = TestClient(app)
+
+
+def setup_function() -> None:
+    store.reset()
 
 
 def test_create_keyword_columns_and_listening_feed() -> None:
@@ -28,8 +32,9 @@ def test_create_keyword_columns_and_listening_feed() -> None:
 
     assert data["column"] == "Sertanejo"
     assert data["volume"] >= 1
-    assert "mentions" in data
     assert data["sentiment"]["positivo"] >= 1
+    assert "top_terms" in data
+    assert any(item["term"] == "sertanejo" for item in data["top_terms"])
 
 
 def test_duplicate_column_returns_conflict() -> None:

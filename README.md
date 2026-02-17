@@ -20,7 +20,8 @@ Este repositório agora já tem uma base funcional de backend para o **Super Age
    - volume,
    - distribuição de sentimento,
    - breakdown por origem,
-   - lista das menções recentes.
+   - principais termos associados (top terms),
+  - lista das menções recentes.
 
 ## Endpoints disponíveis
 
@@ -29,7 +30,7 @@ Este repositório agora já tem uma base funcional de backend para o **Super Age
 - `GET /columns`
 - `DELETE /columns/{column_name}`
 - `POST /mentions`
-- `GET /listening/{column_name}?limit=50`
+- `GET /listening/{column_name}?limit=50` (retorna também `top_terms`)
 
 ## Como rodar
 
